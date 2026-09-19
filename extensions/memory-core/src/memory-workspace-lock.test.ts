@@ -3,13 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getFileLockProcessStartTime } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingState,
+  memoryCoreWorkspaceStateKey,
+  SHORT_TERM_LOCK_NAMESPACE,
+} from "./dreaming-state.js";
 import {
   withMemoryWorkspaceLock,
   withMemoryWorkspacePreparation,
 } from "./memory-workspace-lock.js";
-import { auditShortTermPromotionArtifacts } from "./short-term-promotion-artifacts.js";
+import {
+  auditShortTermPromotionArtifacts,
+  repairShortTermPromotionArtifacts,
+} from "./short-term-promotion-artifacts.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -42,6 +52,72 @@ describe("memory workspace lock orphan recovery", () => {
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
     return workspaceDir;
   }
+
+  it("waits for an active short-term lock before repairing", async () => {
+    const workspaceDir = await makeWorkspace();
+    await testing.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: "2026-04-04T00:00:00.000Z",
+      entries: {
+        bad: {
+          path: "",
+        },
+      },
+    });
+    const acquiredAt = Date.now();
+    const activeLock = { owner: `${process.pid}:${acquiredAt}`, acquiredAt };
+    await testing.writeShortTermLock(workspaceDir, activeLock);
+
+    const blocked = createDeferred<void>();
+    const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+    let activeObservations = 0;
+    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
+      const store = createPluginStateKeyedStoreForTests<T>("memory-core", options);
+      return {
+        ...store,
+        async observe(...args: Parameters<typeof store.observe>) {
+          const observation = await store.observe(...args);
+          if (
+            options.namespace === SHORT_TERM_LOCK_NAMESPACE &&
+            args[0] === lockKey &&
+            activeObservations < 2
+          ) {
+            expect(observation.value).toEqual(activeLock);
+            if (++activeObservations === 2) {
+              blocked.resolve();
+            }
+          }
+          return observation;
+        },
+      };
+    });
+    let settled = false;
+    const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      // A second real observation proves the owner waited and kept the active lock intact.
+      await Promise.race([
+        blocked.promise,
+        repairPromise.then(() => {
+          throw new Error("Repair completed before observing the active lock");
+        }),
+      ]);
+      expect(settled).toBe(false);
+
+      await testing.deleteShortTermLock(workspaceDir);
+      const repair = await repairPromise;
+
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(repair.removedInvalidEntries).toBe(1);
+    } finally {
+      await testing.deleteShortTermLock(workspaceDir);
+      await Promise.allSettled([repairPromise]);
+      await configureMemoryCoreDreamingStateForTests();
+    }
+  });
 
   it("keeps preparations and writers in the same local FIFO", async () => {
     const workspace = await makeWorkspace();
