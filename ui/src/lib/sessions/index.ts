@@ -42,7 +42,6 @@ export {
   filterSessionRows,
   filterVisibleSessionRows,
   getVisibleSessionRows,
-  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   sessionMatchesArchivedFilter,
   sessionMatchesVisibleSessionScope,
