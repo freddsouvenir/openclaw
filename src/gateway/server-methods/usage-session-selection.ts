@@ -75,6 +75,8 @@ export type UsageSessionSelection = UsageSessionSummaryTarget & {
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
+  /** Recorded lineage attribution when a retained instance has no current store row. */
+  creatorEntry?: SessionEntry;
   scope?: "instance" | "family";
   sessionFamilyKey?: string;
   currentSessionId?: string;
@@ -332,6 +334,7 @@ export async function selectUsageSessions(params: {
             instances: [discovered],
             updatedAt: discovered.mtime,
             scope: "instance",
+            creatorEntry: familyOwners.get(identity)?.entry,
           });
         }
         continue;
