@@ -8,7 +8,6 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
-  isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
@@ -20,7 +19,6 @@ import { collectKnownSessionGroups } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
-  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
@@ -32,7 +30,6 @@ import {
   isPinnableUiSessionRow,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  normalizeDefaultMainSessionAliasForUi,
   readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
@@ -480,48 +477,6 @@ export function collectSidebarSessionRowsByKey(input: {
     rowsByKey.set(row.key, row);
   }
   return rowsByKey;
-}
-
-/**
- * Promote the hidden main session's children to top-level threads, with the
- * same visibility rules as ordinary roots so archived, cron, or
- * system-created children cannot sneak in and pagination stays deterministic.
- */
-export function collectPromotedMainChildRows(input: {
-  rows: readonly GatewaySessionRow[];
-  mainSessionKeys: ReadonlySet<string>;
-  scopedRootKeys: ReadonlySet<string>;
-  showCron: boolean;
-  showSystem: boolean;
-}): GatewaySessionRow[] {
-  const parents = new Map(
-    input.rows.map((row) => [
-      normalizeDefaultMainSessionAliasForUi(row.key),
-      resolveUiSessionNavigationParentKey(row),
-    ]),
-  );
-  return input.rows.filter((row) => {
-    let parentKey = resolveUiSessionNavigationParentKey(row);
-    const visited = new Set<string>();
-    // Runs are not navigation rows; keep the first persistent conversation beneath Home.
-    while (parentKey && isSubagentSessionKey(parentKey)) {
-      const key = normalizeDefaultMainSessionAliasForUi(parentKey);
-      if (visited.has(key)) {
-        return false;
-      }
-      visited.add(key);
-      parentKey = parents.get(key);
-    }
-    return (
-      parentKey != null &&
-      [...input.mainSessionKeys].some((key) => areUiSessionKeysEquivalent(key, parentKey)) &&
-      !input.scopedRootKeys.has(row.key) &&
-      !isSubagentSessionKey(row.key) &&
-      !row.archived &&
-      (input.showCron || !isCronSessionKey(row.key)) &&
-      (input.showSystem || !isSystemCreatedSessionRow(row))
-    );
-  });
 }
 
 export function collectCategorizedChildRootRows(input: {
