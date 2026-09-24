@@ -336,6 +336,92 @@ describe("fleet service upgrade and restore", () => {
     expect(containers.remove).not.toHaveBeenCalled();
   });
 
+  async function createLegacyPodmanCell(containers: ReturnType<typeof createContainerMock>) {
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      now: () => 1000,
+      generateAttemptId: () => NEXT_ATTEMPT_ID,
+    });
+    await service.create({ tenant: "acme", runtime: "podman", gatewayToken: "old-token" });
+    // Simulate a cell network created before Fleet enforced Podman isolation.
+    const network = await containers.inspectNetwork("podman", "openclaw-cell-acme-net");
+    if (network.kind !== "ok") {
+      throw new Error("expected the created cell network");
+    }
+    network.options = {};
+    network.subnets = [{ subnet: "10.89.7.0/24", gateway: "10.89.7.1" }];
+    containers.run.mockClear();
+    containers.createNetwork.mockClear();
+    return service;
+  }
+
+  it("recreates a legacy unisolated Podman cell network isolated during upgrade", async () => {
+    const containers = createContainerMock();
+    const service = await createLegacyPodmanCell(containers);
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
+
+    await service.upgrade("acme");
+
+    expect(containers.createNetwork).toHaveBeenCalledOnce();
+    expect(containers.createNetwork).toHaveBeenCalledWith(
+      "podman",
+      "openclaw-cell-acme-net",
+      expect.objectContaining({ "openclaw.fleet.tenant": "acme" }),
+      { internal: false, subnets: [{ subnet: "10.89.7.0/24", gateway: "10.89.7.1" }] },
+    );
+    // The network is swapped only after the old container is gone and before
+    // the replacement attaches to it.
+    const [removeContainerOrder] = containers.remove.mock.invocationCallOrder;
+    const [removeNetworkOrder] = containers.removeNetwork.mock.invocationCallOrder;
+    const [createNetworkOrder] = containers.createNetwork.mock.invocationCallOrder;
+    const [runOrder] = containers.run.mock.invocationCallOrder;
+    expect(removeContainerOrder).toBeLessThan(removeNetworkOrder ?? 0);
+    expect(removeNetworkOrder).toBeLessThan(createNetworkOrder ?? 0);
+    expect(createNetworkOrder).toBeLessThan(runOrder ?? 0);
+    await expect(
+      containers.inspectNetwork("podman", "openclaw-cell-acme-net"),
+    ).resolves.toMatchObject({ options: { isolate: "true" } });
+  });
+
+  it("leaves an already isolated Podman cell network in place during upgrade", async () => {
+    const containers = createContainerMock();
+    const service = await createLegacyPodmanCell(containers);
+    const network = await containers.inspectNetwork("podman", "openclaw-cell-acme-net");
+    if (network.kind === "ok") {
+      network.options = { isolate: "true" };
+    }
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
+
+    await service.upgrade("acme");
+
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
+    expect(containers.createNetwork).not.toHaveBeenCalled();
+  });
+
+  it("keeps a network for rollback when the isolated recreate cannot reuse the subnet", async () => {
+    const containers = createContainerMock();
+    const service = await createLegacyPodmanCell(containers);
+    containers.inspect
+      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValueOnce({ kind: "missing", state: "missing" });
+    containers.createNetwork.mockRejectedValueOnce(new Error("subnet already in use"));
+
+    await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
+
+    expect(containers.createNetwork).toHaveBeenCalledTimes(2);
+    expect(containers.createNetwork.mock.calls[1]?.[3]).toEqual({ internal: false });
+    expect(containers.run).toHaveBeenCalledOnce();
+    expect(containers.run.mock.calls[0]?.[0].image).toBe("sha256:old-image-id");
+    await expect(
+      containers.inspectNetwork("podman", "openclaw-cell-acme-net"),
+    ).resolves.toMatchObject({ options: { isolate: "true" } });
+  });
+
   it("rejects option-like images before create or upgrade mutations", async () => {
     const containers = createContainerMock();
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });

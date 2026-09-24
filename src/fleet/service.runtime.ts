@@ -41,6 +41,7 @@ import {
   assertCurrentReservation,
   assertManagedInspection,
   assertManagedNetwork,
+  ensureIsolatedCellNetwork,
   buildProfileBaseFromInspection,
   cleanupFailedCreateContainer,
   cleanupFailedCreateNetwork,
@@ -616,6 +617,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             }
             checkpoint();
             await containers.remove(record.runtime, inspection.containerId, false);
+            // Upgrading also migrates a cell network created before Podman
+            // isolation was enforced; the rollback path reuses the new network.
+            await ensureIsolatedCellNetwork({ record, containers, checkpoint });
             checkpoint();
             await containers.run(nextProfile, true);
             // `run -d` succeeds once the container launches, and a broken image can stay
