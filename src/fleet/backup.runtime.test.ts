@@ -709,6 +709,60 @@ describe("fleet restore runtime", () => {
     },
   );
 
+  it("recreates an unisolated Podman cell network isolated on its subnet during restore", async () => {
+    record = { ...record, runtime: "podman" };
+    const archive = await createArchive();
+    const labels = {
+      "openclaw.fleet.tenant": "acme",
+      "openclaw.fleet.owner": cellOwnerId(record.dataDir),
+    };
+    let network: Awaited<ReturnType<FleetContainerRuntime["inspectNetwork"]>> = {
+      kind: "ok",
+      labels,
+      attachedContainers: [],
+      internal: false,
+      options: {},
+      subnets: [{ subnet: "10.89.4.0/24", gateway: "10.89.4.1" }],
+    };
+    const containers = {
+      ...containerMock(),
+      inspectNetwork: vi.fn<FleetContainerRuntime["inspectNetwork"]>(async () => network),
+      removeNetwork: vi.fn<FleetContainerRuntime["removeNetwork"]>(async () => {
+        network = { kind: "missing" };
+      }),
+      createNetwork: vi.fn<FleetContainerRuntime["createNetwork"]>(
+        async (_runtime, _name, createLabels, options) => {
+          network = {
+            kind: "ok",
+            labels: { ...createLabels },
+            attachedContainers: [],
+            internal: options.internal,
+            options: { isolate: "true" },
+            subnets: [...(options.subnets ?? [])],
+          };
+        },
+      ),
+    };
+
+    await restoreFleetCell(restoreParams(containers, archive));
+
+    expect(containers.createNetwork).toHaveBeenCalledWith(
+      "podman",
+      "openclaw-cell-acme-net",
+      labels,
+      {
+        internal: false,
+        subnets: [{ subnet: "10.89.4.0/24", gateway: "10.89.4.1" }],
+      },
+    );
+    const [removeContainerOrder] = containers.remove.mock.invocationCallOrder;
+    const [removeNetworkOrder] = containers.removeNetwork.mock.invocationCallOrder;
+    const [runOrder] = containers.run.mock.invocationCallOrder;
+    expect(removeContainerOrder).toBeLessThan(removeNetworkOrder ?? 0);
+    expect(removeNetworkOrder).toBeLessThan(runOrder ?? 0);
+    expect(network).toMatchObject({ options: { isolate: "true" } });
+  });
+
   it("restarts a force-stopped cell when restore fails before removal", async () => {
     const archive = await createArchive();
     const running = inspection(true);

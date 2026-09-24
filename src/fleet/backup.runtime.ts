@@ -32,6 +32,7 @@ import type { FleetCellRecord } from "./registry.js";
 import {
   assertManagedInspection,
   assertManagedNetwork,
+  ensureIsolatedCellNetwork,
   buildProfileBaseFromInspection,
   canonicalizeForContainment,
   prepareCellConfig,
@@ -683,6 +684,11 @@ export async function restoreFleetCell(params: {
     await params.checkpoint();
     await params.containers.remove(params.record.runtime, removable.containerId, false);
     containerRemoved = true;
+    await ensureIsolatedCellNetwork({
+      record: params.record,
+      containers: params.containers,
+      checkpoint: params.checkpoint,
+    });
     await params.checkpoint();
     previousDisplaced = true;
     if (dataTarget) {

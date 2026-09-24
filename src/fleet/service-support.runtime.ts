@@ -15,6 +15,7 @@ import {
   FLEET_ENV_KEYS_LABEL,
   FLEET_OWNER_LABEL,
   FLEET_TENANT_LABEL,
+  isCellNetworkIsolated,
   parseEnvAssignments,
   validateTenantId,
   type CellContainerProfile,
@@ -640,6 +641,70 @@ export function assertManagedNetwork(
     );
   }
   return inspection;
+}
+
+/**
+ * Network options cannot change in place, so a Podman cell network created
+ * before isolation was enforced is recreated isolated on the same subnet. Call
+ * only after the cell container is removed: `network rm` (never `-f`, which
+ * would delete an attached container) then refuses any network still in use.
+ * Returns true when the network was recreated.
+ */
+export async function ensureIsolatedCellNetwork(params: {
+  record: FleetCellRecord;
+  containers: FleetContainerRuntime;
+  checkpoint: () => Promise<void>;
+}): Promise<boolean> {
+  const { record, containers } = params;
+  const networkName = cellNetworkName(record.tenantId);
+  const current = assertManagedNetwork(
+    record,
+    await containers.inspectNetwork(record.runtime, networkName),
+  );
+  if (isCellNetworkIsolated(record.runtime, current.options)) {
+    return false;
+  }
+  if (current.attachedContainers.length > 0) {
+    throw new Error(`Refusing to recreate ${networkName} isolated: a container is still attached.`);
+  }
+  await params.checkpoint();
+  await containers.removeNetwork(record.runtime, networkName);
+  try {
+    await containers.createNetwork(record.runtime, networkName, current.labels, {
+      internal: current.internal,
+      subnets: current.subnets,
+    });
+  } catch (error) {
+    // Put a network back so the caller's rollback can re-run the previous
+    // container. createNetwork always isolates Podman networks, so a failure
+    // here is most likely the subnet; retry once with an automatic subnet.
+    const reclaimed =
+      (await containers.inspectNetwork(record.runtime, networkName)).kind === "ok" ||
+      (await containers
+        .createNetwork(record.runtime, networkName, current.labels, {
+          internal: current.internal,
+        })
+        .then(
+          () => true,
+          () => false,
+        ));
+    throw new Error(
+      reclaimed
+        ? `Fleet could not recreate ${networkName} isolated on its previous subnet; a replacement network is in place, check it with fleet doctor.`
+        : `Fleet removed ${networkName} to recreate it isolated, but no network could be created.`,
+      { cause: error },
+    );
+  }
+  const recreated = assertManagedNetwork(
+    record,
+    await containers.inspectNetwork(record.runtime, networkName),
+  );
+  if (!isCellNetworkIsolated(record.runtime, recreated.options)) {
+    throw new Error(
+      `Fleet recreated ${networkName}, but ${record.runtime} does not report it isolated.`,
+    );
+  }
+  return true;
 }
 
 export async function restorePreviousCell(params: {
