@@ -54,6 +54,8 @@ function healthyNetwork(): Extract<FleetNetworkInspectResult, { kind: "ok" }> {
     },
     attachedContainers: [{ id: "cell", name: "openclaw-cell-acme" }],
     internal: false,
+    options: {},
+    subnets: [],
   };
 }
 
@@ -123,6 +125,7 @@ describe("fleet doctor", () => {
         inspection.capDrop = ["CAP_CHOWN", "CAP_KILL", "CAP_SETUID"];
         inspection.effectiveCaps = [];
         network.attachedContainers = [];
+        network.options = { isolate: "true" };
       }
       const reports = await runFleetDoctor({
         env,
@@ -149,6 +152,7 @@ describe("fleet doctor", () => {
         "network-owned",
         "network-attachments",
         "network-egress",
+        "network-isolation",
         "data-dir",
         "auth-dir",
       ]);
@@ -169,9 +173,11 @@ describe("fleet doctor", () => {
     const inspection = healthyInspection();
     inspection.capDrop = ["CAP_KILL"];
     inspection.effectiveCaps = ["CAP_CHOWN"];
+    const network = healthyNetwork();
+    network.options = { isolate: "true" };
     const reports = await runFleetDoctor({
       env,
-      containers: runtimeMock(inspection),
+      containers: runtimeMock(inspection, network),
       fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
     });
     expect(reports[0]?.findings).toContainEqual(
@@ -334,5 +340,57 @@ describe("fleet doctor", () => {
       expect.objectContaining({ check: "network-attachments", status: "pass" }),
     );
     expect(reports[0]?.findings.filter((entry) => entry.status === "fail")).toEqual([]);
+  });
+
+  it.each([
+    [{}, "fail", "isolate=unset"],
+    [{ isolate: "false" }, "fail", "isolate=false"],
+    [{ isolate: "true" }, "pass", "isolate=true"],
+    [{ isolate: "strict" }, "pass", "isolate=strict"],
+  ] as const)(
+    "reports Podman cell network isolation for options %j",
+    async (options, status, detail) => {
+      await deleteFleetCell(env, "acme");
+      record = await reserveFleetCell(env, {
+        tenantId: "acme",
+        createdAtMs: 0,
+        image: "image",
+        runtime: "podman",
+        containerName: "openclaw-cell-acme",
+        dataDir: path.join(root, "fleet", "cells", "acme"),
+      });
+      const inspection = healthyInspection();
+      inspection.capDrop = ["CAP_CHOWN"];
+      inspection.effectiveCaps = [];
+      const network = healthyNetwork();
+      network.attachedContainers = [];
+      network.options = { ...options };
+      const reports = await runFleetDoctor({
+        env,
+        containers: runtimeMock(inspection, network),
+        fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
+      });
+      expect(reports[0]?.findings).toContainEqual(
+        expect.objectContaining({
+          check: "network-isolation",
+          status,
+          detail: expect.stringContaining(detail),
+        }),
+      );
+      expect(
+        reports[0]?.findings.filter((entry) => entry.status === "fail").map((entry) => entry.check),
+      ).toEqual(status === "fail" ? ["network-isolation"] : []);
+    },
+  );
+
+  it("does not require a netavark isolate option on Docker cell networks", async () => {
+    const reports = await runFleetDoctor({
+      env,
+      containers: runtimeMock(),
+      fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
+    });
+    expect(reports[0]?.findings).toContainEqual(
+      expect.objectContaining({ check: "network-isolation", status: "pass" }),
+    );
   });
 });

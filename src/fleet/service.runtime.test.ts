@@ -548,6 +548,8 @@ describe("fleet service", () => {
         labels: fleetLabels(),
         attachedContainers: [],
         internal: false,
+        options: {},
+        subnets: [],
       })
       .mockResolvedValueOnce({ kind: "missing" });
     const service = createFleetService({
@@ -645,6 +647,8 @@ describe("fleet service", () => {
       labels: {},
       attachedContainers: [],
       internal: false,
+      options: {},
+      subnets: [],
     });
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
 

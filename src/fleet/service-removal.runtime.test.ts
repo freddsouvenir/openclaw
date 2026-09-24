@@ -258,6 +258,8 @@ describe("fleet service filesystem and removal", () => {
       },
       attachedContainers: [],
       internal: false,
+      options: {},
+      subnets: [],
     });
     containers.remove.mockClear();
 
@@ -305,6 +307,8 @@ describe("fleet service filesystem and removal", () => {
       labels: fleetLabels(),
       attachedContainers: [{ id: "peer-id", name: "unexpected-peer" }],
       internal: false,
+      options: {},
+      subnets: [],
     });
     containers.remove.mockClear();
 

@@ -59,6 +59,8 @@ function containerMock(current: FleetContainerInspectResult = inspection()) {
       },
       attachedContainers: [{ id: "cell", name: record.containerName }],
       internal: false,
+      options: {},
+      subnets: [],
     })),
     isDockerRootless: vi.fn(async () => false),
     run: vi.fn<FleetContainerRuntime["run"]>(async () => undefined),
@@ -514,6 +516,8 @@ describe("fleet restore runtime", () => {
       labels: { "openclaw.fleet.tenant": "acme", "openclaw.fleet.owner": "foreign" },
       attachedContainers: [],
       internal: false,
+      options: {},
+      subnets: [],
     });
     await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
       /ownership labels/iu,

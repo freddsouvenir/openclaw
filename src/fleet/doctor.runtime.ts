@@ -9,6 +9,7 @@ import {
   FLEET_GATEWAY_PORT,
   FLEET_OWNER_LABEL,
   FLEET_TENANT_LABEL,
+  isCellNetworkIsolated,
 } from "./cell-profile.js";
 import type { FleetContainerRuntime } from "./containers.runtime.js";
 import { listFleetCells } from "./registry.js";
@@ -366,6 +367,21 @@ export async function runFleetDoctor(params: {
             : network.internal
               ? finding("network-egress", "pass", "egress: internal")
               : finding("network-egress", "pass", "egress: bridge (unrestricted)"),
+        );
+        findings.push(
+          record.runtime !== "podman"
+            ? finding(
+                "network-isolation",
+                "pass",
+                "isolate: docker bridge (Docker drops traffic between bridge networks by default)",
+              )
+            : isCellNetworkIsolated(record.runtime, network.options)
+              ? finding("network-isolation", "pass", `isolate=${network.options.isolate}`)
+              : finding(
+                  "network-isolation",
+                  "fail",
+                  `isolate=${network.options.isolate ?? "unset"}: other Podman cell networks on this host can reach this cell. Recreate the network isolated with openclaw fleet upgrade ${record.tenantId}.`,
+                ),
         );
       }
 

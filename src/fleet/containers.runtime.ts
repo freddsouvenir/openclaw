@@ -11,6 +11,13 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
+import {
+  buildNetworkCreateArgs,
+  readNetworkSubnets,
+  validateNetworkName,
+  type FleetNetworkCreateOptions,
+  type FleetNetworkSubnet,
+} from "./containers.network.js";
 import { createRedactingStreamWriter } from "./containers.redaction.js";
 
 type FleetContainerCommandOptions = {
@@ -92,6 +99,9 @@ export type FleetNetworkInspectResult =
       labels: Record<string, string>;
       attachedContainers: Array<{ id: string; name?: string }>;
       internal: boolean;
+      /** Driver options as the runtime reports them (Podman: `isolate`, ...). */
+      options: Record<string, string>;
+      subnets: FleetNetworkSubnet[];
     }
   | { kind: "missing" }
   | { kind: "unavailable"; error: string };
@@ -301,6 +311,14 @@ function parseNetworkInspectOutput(
     labels: Object.assign({}, readStringRecord(inspected.Labels ?? inspected.labels)),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
     internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
+    options: Object.assign({}, readStringRecord(inspected.Options ?? inspected.options)),
+    // Podman reports `subnets`; Docker reports `IPAM.Config`.
+    subnets: readNetworkSubnets(
+      inspected.subnets ??
+        (inspected.IPAM === undefined || inspected.IPAM === null
+          ? undefined
+          : requireRecord(inspected.IPAM).Config),
+    ),
   };
 }
 
@@ -510,14 +528,6 @@ function isMissingNetworkError(stderr: string): boolean {
   );
 }
 
-function validateNetworkName(networkName: string): string {
-  const normalized = networkName.trim();
-  if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet network name is invalid.");
-  }
-  return normalized;
-}
-
 function validateContainerName(containerName: string): string {
   const normalized = containerName.trim();
   if (!normalized || normalized.startsWith("-")) {
@@ -686,20 +696,9 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       networkName: string,
       labels: Readonly<Record<string, string>>,
-      options: { internal: boolean },
+      options: FleetNetworkCreateOptions,
     ): Promise<void> {
-      const labelArgs = Object.entries(labels)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .flatMap(([key, value]) => ["--label", `${key}=${value}`]);
-      await execute(runtime, [
-        "network",
-        "create",
-        "--driver",
-        "bridge",
-        ...(options.internal ? ["--internal"] : []),
-        ...labelArgs,
-        validateNetworkName(networkName),
-      ]);
+      await execute(runtime, buildNetworkCreateArgs(runtime, networkName, labels, options));
     },
 
     async removeNetwork(runtime: FleetContainerRuntimeName, networkName: string): Promise<void> {
