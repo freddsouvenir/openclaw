@@ -106,12 +106,14 @@ export function createContainerMock(
   });
   const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
   const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
-    async (_runtime, name, labels, options) => {
+    async (runtime, name, labels, options) => {
       networks.set(name, {
         kind: "ok",
         labels: { ...labels },
         attachedContainers: [],
         internal: options.internal,
+        options: runtime === "podman" ? { isolate: "true" } : {},
+        subnets: [...(options.subnets ?? [])],
       });
     },
   );

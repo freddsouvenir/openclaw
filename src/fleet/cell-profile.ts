@@ -174,6 +174,22 @@ export function cellNetworkName(tenantId: string): string {
   return `${cellContainerName(tenantId)}-net`;
 }
 
+/**
+ * Rootless Podman puts every cell bridge in one per-user network namespace, so
+ * two cell networks route to each other unless netavark isolation is on for
+ * both of them. Docker bridges already drop inter-network traffic by default.
+ */
+export function isCellNetworkIsolated(
+  runtime: FleetContainerRuntimeName,
+  networkOptions: Readonly<Record<string, string>>,
+): boolean {
+  if (runtime !== "podman") {
+    return true;
+  }
+  const isolate = networkOptions.isolate?.trim().toLowerCase();
+  return isolate === "true" || isolate === "strict";
+}
+
 export function cellDataDir(stateDir: string, tenantId: string): string {
   return path.join(stateDir, "fleet", "cells", validateTenantId(tenantId));
 }

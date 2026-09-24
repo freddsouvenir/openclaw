@@ -324,6 +324,8 @@ describe("fleet container runtime", () => {
           { id: "container-b", name: "peer-b" },
         ],
         internal: false,
+        options: {},
+        subnets: [],
       });
       expect(executor).toHaveBeenCalledWith(
         runtimeName,
@@ -342,7 +344,83 @@ describe("fleet container runtime", () => {
 
     await expect(
       createFleetContainerRuntime(executor).inspectNetwork("docker", "openclaw-cell-acme-net"),
-    ).resolves.toEqual({ kind: "ok", labels: {}, attachedContainers: [], internal: false });
+    ).resolves.toEqual({
+      kind: "ok",
+      labels: {},
+      attachedContainers: [],
+      internal: false,
+      options: {},
+      subnets: [],
+    });
+  });
+
+  it("reads Podman netavark options and subnets from network inspect", async () => {
+    const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
+      stdout: JSON.stringify([
+        {
+          name: "openclaw-cell-acme-net",
+          driver: "bridge",
+          labels: { "openclaw.fleet.tenant": "acme" },
+          internal: false,
+          options: { isolate: "true" },
+          subnets: [{ subnet: "10.89.0.0/24", gateway: "10.89.0.1" }],
+        },
+      ]),
+      stderr: "",
+      code: 0,
+    }));
+
+    await expect(
+      createFleetContainerRuntime(executor).inspectNetwork("podman", "openclaw-cell-acme-net"),
+    ).resolves.toEqual({
+      kind: "ok",
+      labels: { "openclaw.fleet.tenant": "acme" },
+      attachedContainers: [],
+      internal: false,
+      options: { isolate: "true" },
+      subnets: [{ subnet: "10.89.0.0/24", gateway: "10.89.0.1" }],
+    });
+  });
+
+  it("reads Docker network options and IPAM subnets from network inspect", async () => {
+    const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
+      stdout: JSON.stringify([
+        {
+          Labels: {},
+          Containers: {},
+          Options: { "com.docker.network.bridge.enable_icc": "true" },
+          IPAM: { Driver: "default", Config: [{ Subnet: "172.18.0.0/16" }] },
+        },
+      ]),
+      stderr: "",
+      code: 0,
+    }));
+
+    await expect(
+      createFleetContainerRuntime(executor).inspectNetwork("docker", "openclaw-cell-acme-net"),
+    ).resolves.toMatchObject({
+      options: { "com.docker.network.bridge.enable_icc": "true" },
+      subnets: [{ subnet: "172.18.0.0/16" }],
+    });
+  });
+
+  it("treats malformed network options or subnets as unavailable", async () => {
+    for (const malformed of [
+      { options: { isolate: true } },
+      { subnets: [{ gateway: "10.0.0.1" }] },
+    ]) {
+      const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
+        stdout: JSON.stringify([{ labels: {}, ...malformed }]),
+        stderr: "",
+        code: 0,
+      }));
+      await expect(
+        createFleetContainerRuntime(executor).inspectNetwork("podman", "openclaw-cell-acme-net"),
+      ).resolves.toEqual({
+        kind: "unavailable",
+        error: "network inspect returned an invalid response",
+      });
+    }
   });
 
   it("distinguishes missing networks from unavailable runtimes", async () => {
@@ -577,6 +655,8 @@ describe("fleet container runtime", () => {
         "create",
         "--driver",
         "bridge",
+        "--opt",
+        "isolate=true",
         "--label",
         "openclaw.fleet.attempt=attempt-id",
         "--label",
@@ -587,6 +667,57 @@ describe("fleet container runtime", () => {
       ],
       ["network", "rm", "openclaw-cell-acme-net"],
     ]);
+  });
+
+  it("creates Docker cell networks without a netavark isolate option", async () => {
+    const executor = successfulExecutor();
+    const runtime = createFleetContainerRuntime(executor);
+    await runtime.createNetwork("docker", "openclaw-cell-acme-net", {}, { internal: false });
+    expect(executor.mock.calls[0]?.[1]).toEqual([
+      "network",
+      "create",
+      "--driver",
+      "bridge",
+      "openclaw-cell-acme-net",
+    ]);
+  });
+
+  it("recreates a network on a requested subnet and gateway", async () => {
+    const executor = successfulExecutor();
+    const runtime = createFleetContainerRuntime(executor);
+    await runtime.createNetwork(
+      "podman",
+      "openclaw-cell-acme-net",
+      {},
+      { internal: false, subnets: [{ subnet: "10.89.3.0/24", gateway: "10.89.3.1" }] },
+    );
+    expect(executor.mock.calls[0]?.[1]).toEqual([
+      "network",
+      "create",
+      "--driver",
+      "bridge",
+      "--opt",
+      "isolate=true",
+      "--subnet",
+      "10.89.3.0/24",
+      "--gateway",
+      "10.89.3.1",
+      "openclaw-cell-acme-net",
+    ]);
+  });
+
+  it("rejects a subnet value that could smuggle extra arguments", async () => {
+    const executor = successfulExecutor();
+    const runtime = createFleetContainerRuntime(executor);
+    await expect(
+      runtime.createNetwork(
+        "podman",
+        "openclaw-cell-acme-net",
+        {},
+        { internal: false, subnets: [{ subnet: "--opt=isolate=false" }] },
+      ),
+    ).rejects.toThrow("Fleet network subnet is invalid.");
+    expect(executor).not.toHaveBeenCalled();
   });
 
   it.each([

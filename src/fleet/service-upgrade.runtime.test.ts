@@ -326,6 +326,8 @@ describe("fleet service upgrade and restore", () => {
         { id: "peer-id", name: "unexpected-peer" },
       ],
       internal: false,
+      options: {},
+      subnets: [],
     });
 
     await expect(service.upgrade("acme")).rejects.toThrow(/unexpected containers/iu);
