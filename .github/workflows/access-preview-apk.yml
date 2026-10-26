@@ -55,7 +55,7 @@ jobs:
           gradle.write_text(updated)
           manifest = root / 'apps/android/app/src/main/AndroidManifest.xml'
           original = manifest.read_text()
-          assert original.count('android:label="@string/app_name"') == 1
+          assert original.count('android:label="@string/app_name"') == 2
           manifest.write_text(original.replace('android:label="@string/app_name"', 'android:label="OpenClaw Access Preview"'))
           signing = Path(os.environ['RUNNER_TEMP']) / 'preview-signing'
           password = secrets.token_urlsafe(40)
