@@ -1,0 +1,21 @@
+diff --git a/apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayTls.kt b/apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayTls.kt
+index 20e71cc364..f86645a9ec 100644
+--- a/apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayTls.kt
++++ b/apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayTls.kt
+@@ -51,7 +51,15 @@ fun buildGatewayTlsConfig(
+         val fingerprint = sha256Hex(chain[0].encoded)
+         if (expected != null) {
+           if (fingerprint != expected) {
+-            throw CertificateException("gateway TLS fingerprint mismatch")
++            // Fingerprint mismatch — but if the cert is publicly trusted
++            // (e.g. Cloudflare, reverse proxy), accept it and update the pin.
++            try {
++              defaultTrust.checkServerTrusted(chain, authType)
++              onStore?.invoke(fingerprint)
++              return
++            } catch (_: CertificateException) {
++              throw CertificateException("gateway TLS fingerprint mismatch")
++            }
+           }
+           return
+         }
